@@ -89,6 +89,10 @@ app.post("/moderate", async (req, res) => {
   res.json({ action });
 });
 
+app.get("/health", (req, res) => {
+  res.status(200).send("OK");
+});
+
 app.get("/", (req, res) => {
   res.send("KidGuard AI Server running! POST to /moderate");
 });
