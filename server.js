@@ -3,22 +3,22 @@ const express = require("express");
 const cors = require("cors");
 const bodyParser = require("body-parser");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
+const admin = require("firebase-admin"); // Make sure you run: npm install firebase-admin
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Load API key
+// --- GEMINI SETUP (Your code – perfect!) ---
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 if (!GEMINI_API_KEY) {
-  console.error("ERROR: GEMINI_API_KEY missing in .env!");
+  console.error("ERROR: GEMINI_API_KEY missing!");
   process.exit(1);
 }
 
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 
-// Current stable fast model (December 2025)
 const model = genAI.getGenerativeModel({
-  model: "gemini-2.5-flash", // This works! Fast, cheap, accurate
+  model: "gemini-2.5-flash",
   safetySettings: [
     { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
     { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
@@ -33,6 +33,54 @@ const model = genAI.getGenerativeModel({
 app.use(cors());
 app.use(bodyParser.json());
 
+// --- FIREBASE ADMIN SETUP (SECURE FOR RENDER) ---
+let db = null;
+
+try {
+  const serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT;
+
+  if (serviceAccountJson) {
+    const serviceAccount = JSON.parse(serviceAccountJson);
+
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount),
+    });
+
+    db = admin.firestore();
+    console.log("Firebase Admin connected – logging enabled!");
+  } else {
+    console.warn("FIREBASE_SERVICE_ACCOUNT not set – running without logging");
+  }
+} catch (error) {
+  console.error("Firebase Admin init failed:", error.message);
+}
+
+// --- LOG TO FIRESTORE ---
+async function logToFirebase(deviceId, query, action) {
+  if (!db) return; // No logging if Firebase not connected
+
+  if (
+    !deviceId ||
+    deviceId === "unknown" ||
+    deviceId === "browser-extension-v1"
+  ) {
+    return;
+  }
+
+  try {
+    await db.collection("search_logs").add({
+      deviceId: deviceId.trim(),
+      query: query.trim(),
+      action: action,
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    console.log(`[Logged] ${deviceId} → "${query}" → ${action}`);
+  } catch (error) {
+    console.error("[Log Error]", error.message);
+  }
+}
+
+// --- AI MODERATION (Your code – unchanged and great) ---
 async function moderateWithAI(text) {
   try {
     const prompt = `
@@ -70,10 +118,11 @@ No extra text.
     }
   } catch (error) {
     console.error("AI Error:", error.message || error);
-    return "block"; // Safer default
+    return "block";
   }
 }
 
+// --- MAIN ENDPOINT ---
 app.post("/moderate", async (req, res) => {
   const { query, deviceId = "unknown" } = req.body;
 
@@ -86,17 +135,17 @@ app.post("/moderate", async (req, res) => {
   const action = await moderateWithAI(query);
 
   console.log(`[Verdict] "${query}" → ${action.toUpperCase()}`);
+
+  // 🔥 Save to Firebase (fire & forget)
+  logToFirebase(deviceId, query, action);
+
   res.json({ action });
 });
 
-app.get("/health", (req, res) => {
-  res.status(200).send("OK");
-});
-
-app.get("/", (req, res) => {
-  res.send("KidGuard AI Server running! POST to /moderate");
-});
+// Health & root
+app.get("/health", (req, res) => res.status(200).send("OK"));
+app.get("/", (req, res) => res.send("KidGuard AI Server running!"));
 
 app.listen(PORT, () => {
-  console.log(`KidGuard AI Server running on http://localhost:${PORT}`);
+  console.log(`KidGuard AI Server running on port ${PORT}`);
 });
